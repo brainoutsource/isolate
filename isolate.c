@@ -15,6 +15,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
+#include <sys/capability.h>
 #include <sys/mount.h>
 #include <sys/resource.h>
 #include <sys/signal.h>
@@ -70,6 +72,7 @@ int pass_environ;
 int verbose;
 static int silent;
 static int fsize_limit;
+static int fnumber_limit;
 static int memory_limit;
 static int stack_limit;
 int block_quota;
@@ -657,7 +660,7 @@ setup_rlimits(void)
     RLIM(FSIZE, (rlim_t)fsize_limit * 1024);
 
   RLIM(STACK, (stack_limit ? (rlim_t)stack_limit * 1024 : RLIM_INFINITY));
-  RLIM(NOFILE, 64);
+  RLIM(NOFILE, (fnumber_limit ? (rlim_t)fnumber_limit : 64));
   RLIM(MEMLOCK, 0);
 
   if (max_processes)
@@ -669,11 +672,15 @@ setup_rlimits(void)
 static int
 box_inside(char **args)
 {
+  prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0); // keep capabilities after switch to box uid
+
   cg_enter();
   setup_root();
   setup_rlimits();
   setup_credentials();
-  setup_fds();
+  setup_fds();  
+  setup_capabilities();
+  
   char **env = setup_environment();
 
   if (set_cwd && chdir(set_cwd))
@@ -900,6 +907,7 @@ Options:\n\
     --cg-timing\t\tTime limits affects total run time of the control group\n\
 \t\t\t(this is turned on by default, use --no-cg-timing to turn off)\n\
 -c, --chdir=<dir>\tChange directory to <dir> before executing the program\n\
+    --capability=<cap>\tSet capability <cap> as effective for the program\n\
 -d, --dir=<dir>\t\tMake a directory <dir> visible inside the sandbox\n\
     --dir=<in>=<out>\tMake a directory <out> outside visible as <in> inside\n\
     --dir=<in>=\t\tDelete a previously defined directory rule (even a default one)\n\
@@ -912,6 +920,7 @@ Options:\n\
 \t\t\t\ttmp\tCreate as a temporary directory (implies rw)\n\
 -D, --no-default-dirs\tDo not add default directory rules\n\
 -f, --fsize=<size>\tMax size (in KB) of files that can be created\n\
+-n, --fnumber=<count>\tMax number of file descriptors that can be opened\n\
 -E, --env=<var>\t\tInherit the environment variable <var> from the parent process\n\
 -E, --env=<var>=<val>\tSet the environment variable <var> to <val>; unset it if <var> is empty\n\
 -x, --extra-time=<time>\tSet extra timeout, before which a timing-out program is not yet killed,\n\
@@ -948,6 +957,7 @@ enum opt_code {
   OPT_RUN,
   OPT_CLEANUP,
   OPT_VERSION,
+  OPT_CAPABILITY,
   OPT_CG,
   OPT_CG_MEM,
   OPT_CG_TIMING,
@@ -958,18 +968,20 @@ enum opt_code {
   OPT_TTY_HACK,
 };
 
-static const char short_opts[] = "b:c:d:DeE:f:i:k:m:M:o:p::q:r:st:vw:x:";
+static const char short_opts[] = "b:c:d:DeE:f:i:k:m:M:n:o:p::q:r:st:vw:x:";
 
 static const struct option long_opts[] = {
   { "box-id",		1, NULL, 'b' },
   { "chdir",		1, NULL, 'c' },
   { "cg",		0, NULL, OPT_CG },
+  { "capability",		1, NULL, OPT_CAPABILITY },  
   { "cg-mem",		1, NULL, OPT_CG_MEM },
   { "cg-timing",	0, NULL, OPT_CG_TIMING },
   { "cleanup",		0, NULL, OPT_CLEANUP },
   { "dir",		1, NULL, 'd' },
   { "no-cg-timing",	0, NULL, OPT_NO_CG_TIMING },
   { "no-default-dirs",  0, NULL, 'D' },
+  { "fnumber",		1, NULL, 'n' },
   { "fsize",		1, NULL, 'f' },
   { "env",		1, NULL, 'E' },
   { "extra-time",	1, NULL, 'x' },
@@ -1016,6 +1028,7 @@ main(int argc, char **argv)
   int require_cg = 0;
   char *sep;
   enum opt_code mode = 0;
+  int cap_code;
 
   init_dir_rules();
 
@@ -1031,6 +1044,12 @@ main(int argc, char **argv)
       case OPT_CG:
 	cg_enable = 1;
 	break;
+	case OPT_CAPABILITY:
+	  if (cap_from_name(optarg, &cap_code) != 0) {
+	  	die("Unknown capability: %s\n", optarg);
+	  }
+	  add_capability(cap_code);
+	  break;
       case 'd':
 	if (!set_dir_action(optarg))
 	  usage("Invalid directory rule specified: %s\n", optarg);
@@ -1051,6 +1070,9 @@ main(int argc, char **argv)
       case 'k':
 	stack_limit = opt_uint(optarg);
 	break;
+      case 'n':
+	fnumber_limit = opt_uint(optarg);
+	break;  
       case 'i':
 	redir_stdin = optarg;
 	break;

@@ -7,6 +7,7 @@
 
 #include <stdarg.h>
 #include <stdint.h>
+#include <sys/capability.h>
 #include <sys/types.h>
 
 #define NONRET __attribute__((noreturn))
@@ -50,6 +51,8 @@ void __attribute__((format(printf,1,2))) meta_printf(const char *fmt, ...);
 int set_env_action(char *a0);
 char **setup_environment(void);
 
+void set_cap_ipc_lock(void);
+
 void init_dir_rules(void);
 int set_dir_action(char *arg);
 void apply_dir_rules(int with_defaults);
@@ -84,3 +87,9 @@ struct cf_per_box {
 void cf_parse(void);
 struct cf_per_box *cf_per_box(int box_id);
 struct cf_per_box *cf_current_box(void);
+
+/* capabilities.c */
+
+void add_capability(cap_value_t cap);
+void set_effective_capability(cap_value_t cap);
+void setup_capabilities(void);
